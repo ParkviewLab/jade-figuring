@@ -1,0 +1,5 @@
+targets = ["docker"]
+
+[[slots]]
+job = "docker"
+reason = "linux/amd64 only: Rust built for arm64 under emulation takes most of an hour, and nothing runs the image on arm64"

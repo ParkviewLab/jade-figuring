@@ -1,0 +1,8 @@
+// SPDX-FileCopyrightText: 2026 Gary Frattarola <garyf@parkviewlab.ai>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! jade-figuring: an engineering calculator and date arithmetic for language
+//! models, served over MCP.
+
+pub mod calc;
+pub mod dates;
