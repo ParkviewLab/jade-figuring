@@ -1,0 +1,15 @@
+version = 1
+
+# Documentation and prose: Creative Commons Attribution 4.0 International.
+# CHANGELOG.md is written by the release workflow, which adds no header to a new file.
+[[annotations]]
+path = ["README.md", "LICENSING.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md", "docs/**"]
+SPDX-FileCopyrightText = "2026 Gary Frattarola <garyf@parkviewlab.ai>"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+# Configuration, the version file, the lockfile and CI workflows: AGPL-3.0-or-later.
+# (These cannot carry comment headers, or are generated.)
+[[annotations]]
+path = [".gitignore", ".dockerignore", "VERSION.txt", "Cargo.lock", ".github/**"]
+SPDX-FileCopyrightText = "2026 Gary Frattarola <garyf@parkviewlab.ai>"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
