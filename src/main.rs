@@ -3,50 +3,75 @@
 
 //! jade-figuring: a calculator MCP server.
 
-use std::net::SocketAddr;
-use std::time::Instant;
+mod server;
+mod tools;
 
-use axum::{Json, Router, routing::get};
-use serde_json::{Value, json};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::time::{Duration, Instant};
 
 /// The version, from VERSION.txt at build time.
 pub const VERSION: &str = env!("JADE_FIGURING_VERSION");
 
-fn app(started: Instant) -> Router {
-    Router::new().route("/health", get(move || async move { Json(health(started)) }))
+fn port() -> u16 {
+    std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(35833)
 }
 
-fn health(started: Instant) -> Value {
-    json!({"ok": true, "version": VERSION, "uptime_seconds": started.elapsed().as_secs()})
+/// `jade-figuring health`: exits 0 if this host's server answers `/health`,
+/// for the container's health check (the image has no curl).
+fn health_check() -> std::process::ExitCode {
+    let ok = (|| -> std::io::Result<bool> {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port()));
+        let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
+        s.set_read_timeout(Some(Duration::from_secs(3)))?;
+        s.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut body = String::new();
+        s.read_to_string(&mut body)?;
+        Ok(body.starts_with("HTTP/1.1 200")
+            && body.contains("\"ok\":true")
+            && body.contains("uptime_seconds"))
+    })()
+    .unwrap_or(false);
+    if ok {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
+    match std::env::args().nth(1).as_deref() {
+        Some("health") => return health_check(),
+        Some("--version" | "version") => {
+            println!("jade-figuring {VERSION}");
+            return std::process::ExitCode::SUCCESS;
+        }
+        Some(other) => {
+            eprintln!(
+                "unknown argument '{other}'; run with no arguments to serve, or `health` to check a running server"
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+        None => {}
+    }
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(35833);
-    let addr: SocketAddr = format!("{host}:{port}")
+    let addr: SocketAddr = format!("{host}:{}", port())
         .parse()
         .expect("HOST and PORT form an address");
+    let settings = server::Settings::from_env();
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("the address can be bound");
-    eprintln!("jade-figuring {VERSION} listening on http://{addr}");
-    axum::serve(listener, app(Instant::now()))
+    eprintln!("jade-figuring {VERSION} listening on http://{addr}/mcp");
+    axum::serve(listener, server::app(&settings, Instant::now()))
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
         .await
         .expect("the server runs");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn health_reports_the_version() {
-        let h = health(Instant::now());
-        assert_eq!(h["ok"], true);
-        assert_eq!(h["version"], VERSION);
-    }
+    std::process::ExitCode::SUCCESS
 }

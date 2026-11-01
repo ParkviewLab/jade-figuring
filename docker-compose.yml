@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Gary Frattarola <garyf@parkviewlab.ai>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# jade-figuring: a calculator MCP server, reached at http://<host>:35833/mcp.
+# The server keeps no data, so there is no volume.
+
+services:
+  jade-figuring:
+    image: ghcr.io/parkviewlab/jade-figuring:${JADE_FIGURING_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "35833:35833"
+    environment:
+      # The names clients use to reach this server; requests with any other
+      # Host header are refused (DNS-rebinding protection). CHANGE-ME.
+      JADE_ALLOWED_HOSTS: "localhost,127.0.0.1"

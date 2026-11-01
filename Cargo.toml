@@ -22,7 +22,13 @@ num-bigint = "0.4"
 num-integer = "0.1"
 num-traits = "0.2"
 jiff = "0.2"
+rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server"] }
+tokio-util = "0.7"
 
 [profile.release]
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
