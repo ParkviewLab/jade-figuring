@@ -227,9 +227,23 @@ fn arity(name: &str, args: &[Value], n: usize) -> Result<(), CalcError> {
     }
 }
 
-/// Trigonometric results within rounding of zero are zero (sin(pi) is 0).
-fn snap(x: f64) -> f64 {
-    if x.abs() < 1e-15 { 0.0 } else { x }
+/// A trigonometric value within rounding of zero is zero (sin(pi) is 0), but
+/// not where the argument itself is that small (sin(1e-20) is 1e-20).
+fn snap(value: f64, argument: f64) -> f64 {
+    if value.abs() < 1e-15 && argument.abs() > 1e-6 {
+        0.0
+    } else {
+        value
+    }
+}
+
+/// A coordinate within rounding of zero, relative to the radius, is zero.
+fn near_zero(v: f64, r: f64, t: f64) -> f64 {
+    if v.abs() < 1e-15 * r.abs().max(1.0) && t.abs() > 1e-6 {
+        0.0
+    } else {
+        v
+    }
 }
 
 fn finite(x: f64, what: &str) -> Result<Value, CalcError> {
@@ -336,6 +350,12 @@ pub fn npr(n: &BigInt, k: &BigInt) -> Result<Value, CalcError> {
 /// Rounds to `places` decimal places, half away from zero, on the decimal
 /// digits shown (so 2.345 rounds to 2.35, as on a calculator).
 pub fn round_places(x: f64, places: i32) -> f64 {
+    if places > 15 {
+        return x;
+    }
+    if places < -308 {
+        return 0.0;
+    }
     let s = format!("{:.15e}", x);
     let v: f64 = s.parse().unwrap_or(x);
     let scale = 10f64.powi(places);
@@ -627,7 +647,7 @@ pub fn apply(name: &str, args: &[Value]) -> Result<Value, CalcError> {
         "sin" | "cos" | "tan" | "sec" | "csc" | "cot" => {
             arity(name, args, 1)?;
             let x = real(&args[0], name)?;
-            let (s, c) = (snap(x.sin()), snap(x.cos()));
+            let (s, c) = (snap(x.sin(), x), snap(x.cos(), x));
             let r = match name {
                 "sin" => s,
                 "cos" => c,
@@ -636,7 +656,11 @@ pub fn apply(name: &str, args: &[Value]) -> Result<Value, CalcError> {
                 "csc" => ratio(1.0, s, "csc")?,
                 _ => ratio(c, s, "cot")?,
             };
-            Ok(Value::Real(snap(r)))
+            Ok(Value::Real(if r.abs() < 1e-15 && x.abs() > 1e-6 {
+                0.0
+            } else {
+                r
+            }))
         }
         "asin" | "acos" => {
             arity(name, args, 1)?;
@@ -698,8 +722,8 @@ pub fn apply(name: &str, args: &[Value]) -> Result<Value, CalcError> {
             let (r, t) = (real(&args[0], name)?, real(&args[1], name)?);
             Ok(Value::Text(format!(
                 "x = {}, y = {}",
-                super::value::show_real(snap(r * t.cos())),
-                super::value::show_real(snap(r * t.sin()))
+                super::value::show_real(near_zero(r * t.cos(), r, t)),
+                super::value::show_real(near_zero(r * t.sin(), r, t))
             )))
         }
         "todeg" => one(f64::to_degrees, "todeg"),

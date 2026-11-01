@@ -22,6 +22,8 @@ Each test sent twelve spoken-style questions, three runs each, to gemma-4-12b wi
 - **A separate `date_calculator`.** All nine date questions reached it, in short English with ISO dates: `days between 2026-10-31 and 2026-12-25`, `weekday of 2027-07-04`, `July 4, 2027 day of week`, `time between 2026-10-31 09:15 and 2026-11-01 17:40`. A tool was used in 32 runs of 36.
 - **"including number bases" in the description.** One of six base-conversion questions reached the tool, against none before, and the overall rate fell to 28 of 36; no measurable effect, so the phrase was left out.
 
+- **The built server, before the first release.** The same twelve questions, three runs each, with the tools answering for real: every one of the 27 calls that reached a tool returned the correct result, which the model then spoke correctly (`9261^(1/3) = 21`, `52! / (5! × (52 - 5)!) = 2598960`, `weekday of 2027-07-04 = Sunday`, `1 day, 8 hours and 25 minutes`). In the other 9 runs the model answered without a tool: correctly for the sine of 30 degrees and the base conversions, but twice wrongly for a height by trigonometry (5.62 against 5.638). Whether the model calls a tool is the model's choice; nothing in the server changes it.
+
 Hence the parsers accept the forms the model actually writes (word forms, `choose`, `52C5`, common LaTeX, plain-English date phrases) rather than asking it to learn one notation, and a named notation was not adopted.
 
 ## Results a voice can speak
