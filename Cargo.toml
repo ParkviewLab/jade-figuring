@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Gary Frattarola <garyf@parkviewlab.ai>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# The version of jade-figuring lives in VERSION.txt (bumped at release by `git bump`);
+# the crate's own version stays 0.0.0 and is never shipped. See docs/CONTRIBUTING.md.
+
+[package]
+name = "jade-figuring"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "A calculator MCP server: engineering calculations and date arithmetic for language models"
+repository = "https://github.com/ParkviewLab/jade-figuring"
+publish = false
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
