@@ -274,6 +274,46 @@ fn errors_say_what_and_where() {
 }
 
 #[test]
+fn found_in_review() {
+    for e in [
+        "1e999",
+        "-1e999",
+        "sin(1e999)",
+        "sin(10^400)",
+        "(10^400)°",
+        "(10^400)%",
+        "floor(1e999)",
+    ] {
+        assert!(
+            error(e).contains("too large") || error(e).contains("undefined"),
+            "{e}: {}",
+            error(e)
+        );
+    }
+    check(&[
+        ("round(1.5, 400)", "1.5"),
+        ("round(1.5, -400)", "0"),
+        ("sum(k, k, 10^15, 10^15)", "1000000000000000"),
+        ("(-1)^(10^20)", "1"),
+        ("(-1)^(10^20 + 1)", "-1"),
+        ("1^(10^30)", "1"),
+        ("0^0", "1"),
+        ("sin(1e-20)", "1 × 10^-20"),
+        ("tan(1e-20)", "1 × 10^-20"),
+        ("(-8)^(2/3)", "4"),
+        ("(-8)^(1/3)", "-2"),
+        ("(-32)^(3/5)", "-8"),
+    ]);
+    assert!(result("2^17000").contains("5,118 digits"));
+    assert!(result("2^20000").contains("6,021 digits"));
+    assert!(error("sum(k, k, 10^20, 10^20)").contains("bounds"));
+    assert!(error("sum(k, k, -2^63, 0)").contains("terms"));
+    assert!(error("prod(k, k, 1, 100000)").contains("digits"));
+    assert!(error("-5% + 100").contains("of what"));
+    assert!(error(&format!("{}1{}", "(".repeat(300), ")".repeat(300))).contains("nests"));
+}
+
+#[test]
 fn runaway_work_is_refused_promptly() {
     let started = std::time::Instant::now();
     assert!(error("9^9^9").contains("digits"));

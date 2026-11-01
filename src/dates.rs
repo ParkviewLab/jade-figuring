@@ -198,6 +198,8 @@ fn make_date(y: i64, m: i64, d: i64, text: &str) -> Result<Date, DateError> {
 fn iso(word: &str) -> Result<Option<Moment>, DateError> {
     let bytes = word.as_bytes();
     if word.len() < 10
+        || !word.is_char_boundary(10)
+        || !word[..10].is_ascii()
         || !(bytes[4] == b'-' && bytes[7] == b'-')
         || !word[..4].chars().all(|c| c.is_ascii_digit())
     {
@@ -278,6 +280,54 @@ fn clock(s: &str, whole: &str) -> Result<Time, DateError> {
     Time::new(h, m, sec, 0).map_err(|_| DateError::new(format!("'{whole}' is not a valid time")))
 }
 
+/// A time at word `k`: `09:15`, `9:15 pm`, `09:15-07:00`, `09:15Z`, `17:40 UTC`.
+/// Returns the time, its offset, and the number of words it took.
+fn time_at(ws: &[String], k: usize) -> Result<Option<(Time, Option<i32>, usize)>, DateError> {
+    let at = |j: usize| ws.get(j).map(String::as_str).unwrap_or("");
+    let word = at(k);
+    if !word.contains(':') || !word.starts_with(|c: char| c.is_ascii_digit()) {
+        return Ok(None);
+    }
+    let (text, mut off) = split_offset(word, word)?;
+    if !is_clock(text) {
+        return Ok(None);
+    }
+    let mut t = clock(text, word)?;
+    let mut used = 1;
+    match at(k + 1) {
+        "am" | "a.m." => {
+            if t.hour() > 12 {
+                return Err(DateError::new(format!("'{word} am' is not a valid time")));
+            }
+            if t.hour() == 12 {
+                t = Time::new(0, t.minute(), t.second(), 0).unwrap();
+            }
+            used += 1;
+        }
+        "pm" | "p.m." => {
+            if t.hour() > 12 {
+                return Err(DateError::new(format!("'{word} pm' is not a valid time")));
+            }
+            if t.hour() < 12 {
+                t = Time::new(t.hour() + 12, t.minute(), t.second(), 0).unwrap();
+            }
+            used += 1;
+        }
+        _ => {}
+    }
+    if off.is_none() {
+        let next = at(k + used);
+        if matches!(next, "z" | "utc" | "gmt") {
+            off = Some(0);
+            used += 1;
+        } else if next.starts_with(['+', '-']) && offset(next).is_some() {
+            off = offset(next);
+            used += 1;
+        }
+    }
+    Ok(Some((t, off, used)))
+}
+
 fn is_clock(w: &str) -> bool {
     w.contains(':')
         && w.split(':')
@@ -318,34 +368,29 @@ fn pieces(input: &str) -> Result<Vec<Piece>, DateError> {
             )));
         }
         if let Some(m) = iso(w)? {
-            // `2026-10-31 09:15`, then an optional offset word.
+            // `2026-10-31 09:15`, with an optional offset or am/pm.
             let mut m = m;
-            if !m.has_time && is_clock(at(i + 1)) {
-                let t = clock(at(i + 1), at(i + 1))?;
-                m = Moment {
-                    dt: m.dt.date().to_datetime(t),
-                    has_time: true,
-                    offset: None,
-                };
-                i += 1;
-                let (t, o) = split_offset(at(i), at(i))?;
-                if o.is_some() {
-                    m.dt = m.dt.date().to_datetime(clock(t, at(i))?);
-                    m.offset = o;
+            i += 1;
+            if !m.has_time {
+                let k = if at(i) == "at" { i + 1 } else { i };
+                if let Some((t, off, used)) = time_at(&ws, k)? {
+                    m = Moment {
+                        dt: m.dt.date().to_datetime(t),
+                        has_time: true,
+                        offset: off,
+                    };
+                    i = k + used;
                 }
-            }
-            let next = at(i + 1);
-            if m.has_time && m.offset.is_none() {
-                if next == "z" || next == "utc" || next == "gmt" {
+            } else if m.offset.is_none() {
+                if matches!(at(i), "z" | "utc" | "gmt") {
                     m.offset = Some(0);
                     i += 1;
-                } else if next.starts_with(['+', '-']) && offset(next).is_some() {
-                    m.offset = offset(next);
+                } else if at(i).starts_with(['+', '-']) && offset(at(i)).is_some() {
+                    m.offset = offset(at(i));
                     i += 1;
                 }
             }
             out.push(Piece::Moment(m));
-            i += 1;
             continue;
         }
         // `July 4, 2027`, `4 July 2027`, `the 4th of July 2027`.
@@ -374,24 +419,11 @@ fn pieces(input: &str) -> Result<Vec<Piece>, DateError> {
             i += step;
             // An optional time: `at 9:15 am`, `17:40`.
             let k = if at(i) == "at" { i + 1 } else { i };
-            if is_clock(at(k)) {
-                let mut t = clock(at(k), at(k))?;
-                let mut used = k + 1;
-                match at(k + 1) {
-                    "am" | "a.m." if t.hour() == 12 => {
-                        t = Time::new(0, t.minute(), t.second(), 0).unwrap();
-                        used += 1;
-                    }
-                    "pm" | "p.m." if t.hour() < 12 => {
-                        t = Time::new(t.hour() + 12, t.minute(), t.second(), 0).unwrap();
-                        used += 1;
-                    }
-                    "am" | "a.m." | "pm" | "p.m." => used += 1,
-                    _ => {}
-                }
+            if let Some((t, off, used)) = time_at(&ws, k)? {
                 m.dt = date.to_datetime(t);
                 m.has_time = true;
-                i = used;
+                m.offset = off;
+                i = k + used;
             }
             out.push(Piece::Moment(m));
             continue;
@@ -607,28 +639,33 @@ fn shifted(ps: &[Piece], m: Moment) -> Result<String, DateError> {
     let mut total: i64 = 0;
     let mut read = Vec::new();
     let mut fine = false;
+    let mut previous: Option<i64> = None;
     for (k, p) in ps.iter().enumerate() {
         let Piece::Period(n, unit) = p else { continue };
         if *unit != Unit::Days && *unit != Unit::Weeks {
             fine = true;
         }
+        // The sign written before this period, back to the previous period or the date.
         let before = ps[..k].iter().rev().find_map(|q| match q {
-            Piece::Plus => Some(1),
-            Piece::Minus => Some(-1),
-            Piece::Period(..) | Piece::Moment(_) => Some(0),
+            Piece::Plus => Some(Some(1)),
+            Piece::Minus => Some(Some(-1)),
+            Piece::Period(..) | Piece::Moment(_) => Some(None),
             Piece::Word(_) => None,
         });
+        // A sign written after it (`3 days before`, `2 weeks and 3 days ago`), up to the date.
         let after = ps[k + 1..].iter().find_map(|q| match q {
-            Piece::Plus => Some(1),
-            Piece::Minus => Some(-1),
-            Piece::Period(..) | Piece::Moment(_) => Some(0),
-            Piece::Word(_) => None,
+            Piece::Plus => Some(Some(1)),
+            Piece::Minus => Some(Some(-1)),
+            Piece::Moment(_) => Some(None),
+            Piece::Period(..) | Piece::Word(_) => None,
         });
-        let sign = match (before, after) {
-            (Some(s), _) if s != 0 => s,
-            (_, Some(s)) if s != 0 => s,
+        let sign = match (before.flatten(), previous, after.flatten()) {
+            (Some(s), _, _) => s,
+            (None, Some(s), _) => s,
+            (None, None, Some(s)) => s,
             _ => 1,
         };
+        previous = Some(sign);
         total += sign * n * unit.seconds();
         let unit_name = match unit {
             Unit::Seconds => "second",
@@ -782,6 +819,39 @@ mod tests {
             "2026-11-01 00:15-07:00 (Sunday)"
         );
         assert_eq!(result("2024-02-28 + 1 day"), "2024-02-29 (Thursday)");
+    }
+
+    #[test]
+    fn found_in_review() {
+        assert!(error("2026-10-3é").contains("no date") || error("2026-10-3é").contains("valid"));
+        assert_eq!(
+            result("time between 2026-10-31 09:15-07:00 and 2026-11-01 17:40-07:00"),
+            "1 day, 8 hours and 25 minutes (1,945 minutes in all)"
+        );
+        assert_eq!(
+            result("time between 2026-10-31 09:15Z and 2026-11-01 17:40Z"),
+            "1 day, 8 hours and 25 minutes (1,945 minutes in all)"
+        );
+        assert_eq!(
+            result("2026-12-31 minus 2 weeks and 3 days"),
+            "2026-12-14 (Monday)"
+        );
+        assert_eq!(
+            result("2026-10-31 minus 3 days and 2 weeks"),
+            "2026-10-14 (Wednesday)"
+        );
+        assert_eq!(
+            result("2 weeks and 3 days before 2026-12-31"),
+            "2026-12-14 (Monday)"
+        );
+        assert_eq!(
+            result("time between 2026-10-31 9:15 am and 2026-10-31 5:40 pm"),
+            "8 hours and 25 minutes (505 minutes in all)"
+        );
+        assert_eq!(
+            result("time between 2026-10-31 at 12:00 am and 2026-10-31 at 12:00 pm"),
+            "12 hours (720 minutes in all)"
+        );
     }
 
     #[test]

@@ -48,6 +48,21 @@ impl Eval {
     }
 
     pub fn eval(&mut self, e: &Expr) -> Result<Value, CalcError> {
+        let v = self.eval_node(e)?;
+        if let Value::Real(x) = v {
+            if x.is_nan() {
+                return Err(CalcError::new("the result is undefined"));
+            }
+            if x.is_infinite() {
+                return Err(CalcError::new(
+                    "the result is too large (beyond about 1.8 × 10^308)",
+                ));
+            }
+        }
+        Ok(v)
+    }
+
+    fn eval_node(&mut self, e: &Expr) -> Result<Value, CalcError> {
         self.tick()?;
         match e {
             Expr::Num(n) => number(n),
@@ -121,7 +136,15 @@ impl Eval {
 
     fn binary(&mut self, op: BinOp, a: &Expr, b: &Expr) -> Result<Value, CalcError> {
         if matches!(op, BinOp::Add | BinOp::Sub) {
-            if let Expr::Percent(p) = a {
+            let leading = match a {
+                Expr::Percent(p) => Some(p),
+                Expr::Neg(inner) => match inner.as_ref() {
+                    Expr::Percent(p) => Some(p),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(p) = leading {
                 let p = super::render::render(p);
                 return Err(CalcError::new(format!(
                     "{p}% of what? Write the value first, as in 100 + {p}%, or write {p}% as a fraction"
@@ -224,11 +247,12 @@ impl Eval {
                 "{which} runs between whole numbers"
             )));
         };
-        let (from, to) = (
-            from.to_i64().unwrap_or(i64::MAX),
-            to.to_i64().unwrap_or(i64::MAX),
-        );
-        if to - from + 1 > MAX_TERMS {
+        let (Some(from), Some(to)) = (from.to_i64(), to.to_i64()) else {
+            return Err(CalcError::new(format!(
+                "{which} runs between bounds of at most 9.2 × 10^18 in size"
+            )));
+        };
+        if i128::from(to) - i128::from(from) + 1 > i128::from(MAX_TERMS) {
             return Err(CalcError::new(format!(
                 "{which} over more than {} terms is too long to compute",
                 group(MAX_TERMS as usize)
@@ -446,8 +470,12 @@ fn digits_of_power(base: &BigInt, exp: u64) -> f64 {
     if b <= BigInt::from(1) {
         return 1.0;
     }
-    let log = b.bits() as f64 * std::f64::consts::LOG10_2;
-    exp as f64 * log
+    // log10 of the base, from its value where it fits a float, else from its length.
+    let log = match b.to_f64() {
+        Some(f) if f.is_finite() => f.log10(),
+        _ => (b.bits() - 1) as f64 * std::f64::consts::LOG10_2,
+    };
+    (exp as f64 * log).floor() + 1.0
 }
 
 pub fn arith(op: BinOp, x: &Value, y: &Value) -> Result<Value, CalcError> {
@@ -456,7 +484,17 @@ pub fn arith(op: BinOp, x: &Value, y: &Value) -> Result<Value, CalcError> {
         match op {
             Add => return Ok(Value::Int(a + b)),
             Sub => return Ok(Value::Int(a - b)),
-            Mul => return Ok(Value::Int(a * b)),
+            Mul => {
+                let bits = a.bits() + b.bits();
+                if bits > MAX_INT_DIGITS * 10 / 3 + 4 {
+                    return Err(CalcError::new(format!(
+                        "the result has about {} digits, beyond the {} this calculator works with",
+                        group((bits as f64 * std::f64::consts::LOG10_2) as usize),
+                        group(MAX_INT_DIGITS as usize)
+                    )));
+                }
+                return Ok(Value::Int(a * b));
+            }
             Div => {
                 if b.is_zero() {
                     return Err(CalcError::new("division by zero is undefined"));
@@ -466,9 +504,20 @@ pub fn arith(op: BinOp, x: &Value, y: &Value) -> Result<Value, CalcError> {
                 }
             }
             Pow if !b.is_negative() => {
+                let one = BigInt::from(1);
+                if a.is_zero() {
+                    return Ok(Value::Int(if b.is_zero() { one } else { BigInt::zero() }));
+                }
+                if *a == one {
+                    return Ok(Value::Int(one));
+                }
+                if *a == -one.clone() {
+                    let even = (b % 2u32).is_zero();
+                    return Ok(Value::Int(if even { one } else { -one }));
+                }
                 let e = b.to_u64().unwrap_or(u64::MAX);
                 let digits = digits_of_power(a, e);
-                if digits <= MAX_INT_DIGITS as f64 {
+                if digits <= MAX_INT_DIGITS as f64 && e <= u64::from(u32::MAX) {
                     return Ok(Value::Int(a.pow(e as u32)));
                 }
                 return Err(CalcError::new(format!(
@@ -527,15 +576,20 @@ pub fn arith(op: BinOp, x: &Value, y: &Value) -> Result<Value, CalcError> {
                 return Err(CalcError::new("zero to a negative power is undefined"));
             }
             if a < 0.0 && b.fract() != 0.0 {
-                // An odd root of a negative number: (-8)^(1/3) is -2.
-                let n = 1.0 / b;
-                if (n - n.round()).abs() < 1e-9 && (n.round() as i64) % 2 != 0 {
-                    functions::nth_root(a, n.round())?
-                } else {
+                // p/q with q odd: (-8)^(1/3) is -2 and (-8)^(2/3) is 4.
+                let Some((p, q)) = (1..100i64).step_by(2).find_map(|q| {
+                    let p = (b * q as f64).round();
+                    ((p / q as f64 - b).abs() < 1e-12).then_some((p as i64, q))
+                }) else {
                     return Err(CalcError::new(
                         "a negative number to a fractional power is not a real number",
                     ));
-                }
+                };
+                let root = functions::nth_root(a, q as f64)?;
+                root.abs()
+                    .powi(p.unsigned_abs() as i32)
+                    .powf(p.signum() as f64)
+                    * if p % 2 == 0 { 1.0 } else { root.signum() }
             } else if b.fract() != 0.0 && b != 0.0 && (1.0 / b - (1.0 / b).round()).abs() < 1e-9 {
                 // x^(1/n) is the nth root, exact where the root is.
                 functions::nth_root(a, (1.0 / b).round())?

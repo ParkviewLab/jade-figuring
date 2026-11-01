@@ -82,6 +82,7 @@ pub fn parse(tokens: &[Token], input_len: usize) -> Result<Expr, CalcError> {
         toks: tokens,
         i: 0,
         input_len,
+        depth: 0,
     };
     let e = p.expr(0)?;
     if let Some(t) = p.peek_token() {
@@ -112,7 +113,11 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     input_len: usize,
+    depth: usize,
 }
+
+/// Expressions nest at most this deep.
+const MAX_DEPTH: usize = 200;
 
 fn describe(t: &Tok) -> String {
     match t {
@@ -301,6 +306,18 @@ impl Parser {
     }
 
     fn expr(&mut self, min_bp: u8) -> Result<Expr, CalcError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(CalcError::new(format!(
+                "the expression nests more than {MAX_DEPTH} levels deep"
+            )));
+        }
+        let r = self.expr_inner(min_bp);
+        self.depth -= 1;
+        r
+    }
+
+    fn expr_inner(&mut self, min_bp: u8) -> Result<Expr, CalcError> {
         let mut lhs = self.prefix()?;
         while let Some(t) = self.peek().cloned() {
             let (op, bp, right_assoc) = match &t {
@@ -916,6 +933,7 @@ impl Parser {
             toks: self.toks[start..end].to_vec(),
             i: 0,
             input_len: self.input_len,
+            depth: self.depth,
         };
         let f = sub.expr(0)?;
         if let Some(t) = sub.peek_token() {

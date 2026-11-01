@@ -100,6 +100,9 @@ pub fn show_real(x: f64) -> String {
     if x == 0.0 {
         return "0".into();
     }
+    if !x.is_finite() {
+        return "undefined".into();
+    }
     let sci = format!("{:.*e}", SIG_DIGITS - 1, x);
     let (mant, exp) = sci.split_once('e').unwrap();
     let exp: i32 = exp.parse().unwrap();
